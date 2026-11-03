@@ -1,0 +1,10 @@
+# Local code-signing material — never commit
+signing/
+*.p12
+*.pem
+*.keychain-db
+
+build/
+docs/frames/
+.tmp/
+.DS_Store

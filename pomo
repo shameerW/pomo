@@ -1,0 +1,32 @@
+#!/bin/bash
+# pomo — drive the Pomo menu-bar timer from the terminal.
+#   pomo start [intention...]   pomo pause | resume | toggle | skip | reset | status | hide | show
+#   pomo video [on|off]  — show/hide the YouTube video player (sound keeps playing)
+#   pomo extend [min]  (or pomo +5)  — a few more minutes; right after a phase ends, steps back into it
+cmd="${1:-status}"; shift || true
+case "$cmd" in
+  hide|show) open -g "pomo://$cmd"; echo "hourglass: $cmd" ;;
+  video) open -g "pomo://video?value=${1:-toggle}"; echo "video player: ${1:-toggle}" ;;
+  extend|snooze|+*)
+    m="${1:-5}"; [[ "$cmd" == +* ]] && m="${cmd#+}"
+    open -g "pomo://extend?min=$m"; sleep 0.3; exec "$0" status ;;
+  size) open -g "pomo://size?value=${1:-100}"; echo "hourglass size: ${1:-100}%" ;;
+  start|resume|pause|toggle|skip|reset)
+    q=""
+    if [ $# -gt 0 ]; then
+      q="?intent=$(python3 -c 'import sys,urllib.parse;print(urllib.parse.quote(" ".join(sys.argv[1:])))' "$@")"
+    fi
+    open -g "pomo://$cmd$q"; sleep 0.3; exec "$0" status ;;
+  status)
+    pgrep -xq Pomo || { echo "Pomo is not running"; exit 1; }
+    f="$HOME/Library/Application Support/Pomo/state"
+    [ -f "$f" ] || { echo "Pomo is not running"; exit 1; }
+    while IFS='=' read -r k v; do
+      case "$k" in phase|running|paused|remaining|intention|today|minutes|music) printf -v "$k" '%s' "$v" ;; esac
+    done < <(cat "$f"; echo)
+    state=$([ "$running" = true ] && echo "▶" || { [ "$paused" = true ] && echo "⏸" || echo "■"; })
+    case "$phase" in shortBreak) phase="short break";; longBreak) phase="long break";; esac
+    echo "$state $phase $remaining${intention:+  — $intention}   (today: $today block$([ "$today" = 1 ] || echo s), ${minutes}m)"
+    [ -n "$music" ] && echo "   ♪ $music"; true ;;
+  *) echo "usage: pomo start [intention] | pause | resume | toggle | skip | reset | status | extend [min] | hide | show | video [on|off] | size <70-180>"; exit 1 ;;
+esac
