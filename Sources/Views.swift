@@ -191,6 +191,7 @@ struct QuoteCard: View {
 struct SettingsPanel: View {
     @Environment(Engine.self) private var engine
     @State private var launchAtLogin = Engine.shared.launchAtLogin
+    @State private var apiKey = Secrets.youtubeAPIKey
 
     var body: some View {
         @Bindable var engine = engine
@@ -207,8 +208,9 @@ struct SettingsPanel: View {
                 .help("YouTube's terms expect the video to be visible while it plays. Hiding it is your call.")
             HStack {
                 Text("YouTube API key")
-                SecureField("optional", text: $engine.settings.youtubeAPIKey)
+                SecureField("optional", text: $apiKey)
                     .textFieldStyle(.roundedBorder)
+                    .onChange(of: apiKey) { _, v in Secrets.youtubeAPIKey = v }
             }
             .help("With a key, search uses the official YouTube Data API instead of the public results page.")
             Toggle("Floating hourglass (⌃⌥P)", isOn: $engine.settings.miniTimerOn)

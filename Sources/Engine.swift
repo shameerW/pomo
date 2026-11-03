@@ -46,7 +46,6 @@ struct Settings: Codable, Equatable {
     var sandColor: SandColor = .golden
     var decor: Decor { Decor(frame: frameMaterial, table: tableMaterial, sand: sandColor) }
     var showPlayer = true
-    var youtubeAPIKey = ""
     var summaryOn = true
     var summaryHour = 18
     var summaryMinute = 30
@@ -75,7 +74,6 @@ struct Settings: Codable, Equatable {
         tableMaterial = (try? c.decodeIfPresent(TableMaterial.self, forKey: .tableMaterial)) ?? d.tableMaterial
         sandColor = (try? c.decodeIfPresent(SandColor.self, forKey: .sandColor)) ?? d.sandColor
         showPlayer = try c.decodeIfPresent(Bool.self, forKey: .showPlayer) ?? d.showPlayer
-        youtubeAPIKey = try c.decodeIfPresent(String.self, forKey: .youtubeAPIKey) ?? d.youtubeAPIKey
         summaryOn = try c.decodeIfPresent(Bool.self, forKey: .summaryOn) ?? d.summaryOn
         summaryHour = try c.decodeIfPresent(Int.self, forKey: .summaryHour) ?? d.summaryHour
         summaryMinute = try c.decodeIfPresent(Int.self, forKey: .summaryMinute) ?? d.summaryMinute
@@ -488,15 +486,17 @@ final class Engine {
     /// Plain key=value snapshot for the `pomo status` CLI.
     private func writeState() {
         guard !Screenshots.isActive else { return }
+        // One value per line: strip newlines/control characters from free text (intention, track titles).
+        func line(_ s: String) -> String { String(s.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) }) }
         let state = """
         phase=\(phase.rawValue)
         running=\(isRunning)
         paused=\(pausedRemaining != nil)
         remaining=\(clock)
-        intention=\(intention)
+        intention=\(line(intention))
         today=\(today.count)
         minutes=\(todayMinutes)
-        music=\(audio.isPlaying ? "▶ " : "")\(audio.current?.title ?? audio.status)
+        music=\(audio.isPlaying ? "▶ " : "")\(line(audio.current?.title ?? audio.status))
         """
         try? state.write(to: Paths.support.appendingPathComponent("state"), atomically: true, encoding: .utf8)
     }
@@ -541,8 +541,11 @@ final class Engine {
     func handle(url: URL) {
         guard url.scheme == "pomo" else { return }
         let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
-        if let intent = items.first(where: { $0.name == "intent" })?.value, !intent.isEmpty, phase == .focus {
-            intention = intent
+        // Any web page can open a pomo:// link, so URL input is treated as untrusted: plain text only, bounded.
+        if let raw = items.first(where: { $0.name == "intent" })?.value, phase == .focus {
+            let intent = String(String(raw.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) })
+                .trimmingCharacters(in: .whitespacesAndNewlines).prefix(140))
+            if !intent.isEmpty { intention = intent }
         }
         switch url.host ?? "" {
         case "start", "resume": start()

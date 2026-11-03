@@ -191,7 +191,7 @@ defaults delete com.shameerw.pomo
 | What | Where |
 |---|---|
 | Durations, auto-start, quotes, music, break talks, desk bonsai, hourglass frame, table, sand and size, summary time, launch at login, Dock icon | the ⚙︎ gear in the window |
-| Video player on/off, YouTube API key | the ⚙︎ gear in the window (the player also has its own hide button) |
+| Video player on/off, YouTube API key (stored in your Keychain) | the ⚙︎ gear in the window (the player also has its own hide button) |
 | Your own quotes | `~/Library/Application Support/Pomo/quotes.json`: `{"focus": [{"text": "…", "author": "…"}], "rest": [ … ]}` |
 | Your own music moods | `~/Library/Application Support/Pomo/music.json`: `[{"name": "Lo-fi", "queries": ["lofi hip hop focus mix"]}]` |
 | Your own break talks | `~/Library/Application Support/Pomo/talks.json`: same format, e.g. `[{"name": "Stoic", "queries": ["Ryan Holiday stoicism"]}]` |
@@ -225,6 +225,7 @@ Sources/
 ├── MiniTimer.swift    the floating hourglass, plinth and brass controls
 ├── Plant.swift        the desk bonsai: growth stages and health
 ├── Views.swift        main window and settings
+├── Secrets.swift      Keychain storage for the optional API key
 ├── Music.swift        focus music and break talks: YouTube search (API or fallback) → visible embedded player
 ├── Raga.swift         raga-of-the-hour selection (Hindustani time theory)
 ├── Quotes.swift       quote library and no-repeat shuffle
@@ -249,6 +250,10 @@ Music and talks play through YouTube's official embedded player, set up the way 
 - **Search can use the official API.** Add a free [YouTube Data API key](https://developers.google.com/youtube/v3/getting-started) in Settings and Pomo searches through it, embeddable videos only. With the cache, the free daily quota covers far more than a day of focus. Without a key, Pomo falls back to reading YouTube's public results page, which is a shortcut YouTube's terms don't cover.
 
 For the setup that stays fully within YouTube's terms, add an API key and keep the video visible. Or switch music and break talks off, and Pomo makes no network calls at all.
+
+## Security
+
+Pomo has no servers or accounts, keeps its one optional secret in the Keychain, and treats `pomo://` links and YouTube content as untrusted. See [SECURITY.md](SECURITY.md) for details and how to report an issue.
 
 ## Credits
 

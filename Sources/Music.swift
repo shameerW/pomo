@@ -15,6 +15,12 @@ struct Track: Codable, Hashable {
     let id: String
     let title: String
     let minutes: Int
+
+    /// YouTube video ids are exactly 11 characters of [A-Za-z0-9_-]. The id is placed inside the player
+    /// page's JavaScript, so anything else is rejected rather than escaped.
+    static func isValidID(_ id: String) -> Bool {
+        id.count == 11 && id.unicodeScalars.allSatisfy { CharacterSet.alphanumerics.contains($0) && $0.isASCII || $0 == "-" || $0 == "_" }
+    }
 }
 
 enum MusicLibrary {
@@ -67,8 +73,9 @@ enum MusicLibrary {
 enum YouTubeSearch {
     /// Returns every video with a known length; callers filter by the length they want.
     @MainActor static func search(_ query: String) async -> [Track] {
-        let apiKey = Engine.shared.settings.youtubeAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        return apiKey.isEmpty ? await resultsPage(query) : await api(query, key: apiKey)
+        let apiKey = Secrets.youtubeAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let found = apiKey.isEmpty ? await resultsPage(query) : await api(query, key: apiKey)
+        return found.filter { Track.isValidID($0.id) }
     }
 
     /// YouTube Data API v3: search.list (100 units) + videos.list for durations (1 unit). The free daily
@@ -111,7 +118,7 @@ enum YouTubeSearch {
     static func isoMinutes(_ s: String) -> Int {
         var h = 0, m = 0, sec = 0, n = 0
         for ch in s {
-            if let d = ch.wholeNumberValue { n = n * 10 + d; continue }
+            if let d = ch.wholeNumberValue { n = min(n &* 10 &+ d, 100_000); continue }   // bounded: no overflow trap
             switch ch { case "H": h = n; case "M": m = n; case "S": sec = n; default: break }
             n = 0
         }
@@ -197,7 +204,7 @@ enum YouTubeSearch {
 
 @MainActor
 @Observable
-final class Music: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
+final class Music: NSObject, WKScriptMessageHandler, WKNavigationDelegate, WKUIDelegate {
     /// Focus music: long sets and ambiences, played during focus blocks.
     static let shared = Music(key: "music", moods: MusicLibrary.load(), lengths: 25...100_000, volume: 45, randomStart: true)
     /// Break talks: 3–15 min motivational speeches, a fresh one each break.
@@ -319,6 +326,7 @@ final class Music: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     // MARK: player
 
     private func load(_ track: Track) {
+        guard Track.isValidID(track.id) else { return }
         current = track
         status = ""
         recent = Array(([track.id] + recent).prefix(30))
@@ -328,10 +336,12 @@ final class Music: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         // Long ambiences start at a random point so they don't always open the same way.
         let start = randomStart && track.minutes > 90 ? Int.random(in: 0...(track.minutes - 60) * 60) : 0
         web?.loadHTMLString(Self.page(id: track.id, start: start, volume: Int(volume), autoplay: wantPlaying),
-                            baseURL: URL(string: "https://pomo.local/"))
+                            baseURL: URL(string: "https://\(Self.pageHost)/"))
         updateHost()
     }
 
+    /// Origin of the player page: `.invalid` is reserved and can never resolve (unlike `.local`, which is mDNS).
+    private static let pageHost = "pomo.invalid"
     private static let videoSize = NSSize(width: 356, height: 200)   // YouTube's minimum embed size is 200×200
     private static let barHeight: CGFloat = 28
 
@@ -344,6 +354,7 @@ final class Music: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         let size = NSSize(width: Self.videoSize.width, height: Self.videoSize.height + Self.barHeight)
         let w = WKWebView(frame: NSRect(origin: .zero, size: Self.videoSize), configuration: cfg)
         w.navigationDelegate = self
+        w.uiDelegate = self
         let bar = NSHostingView(rootView: PlayerBar(music: self))
         bar.frame = NSRect(x: 0, y: Self.videoSize.height, width: size.width, height: Self.barHeight)
         let container = NSView(frame: NSRect(origin: .zero, size: size))
@@ -409,7 +420,11 @@ final class Music: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     }
 
     nonisolated func userContentController(_ uc: WKUserContentController, didReceive message: WKScriptMessage) {
-        MainActor.assumeIsolated { handle(message.body as? String ?? "") }
+        MainActor.assumeIsolated {
+            // Only our own player page may talk to the app; YouTube's iframe and anything inside it may not.
+            guard message.frameInfo.isMainFrame, message.frameInfo.securityOrigin.host == Self.pageHost else { return }
+            handle(message.body as? String ?? "")
+        }
     }
 
     private func handle(_ event: String) {
@@ -464,6 +479,37 @@ final class Music: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
 
     nonisolated func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         MainActor.assumeIsolated { status = "Player failed to load" }
+    }
+
+    /// The player page may only load itself and YouTube's player; any link clicked inside it (YouTube logo,
+    /// title, end screen) opens in the default browser instead of navigating the hidden web view.
+    func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
+                             decisionHandler: @escaping @MainActor (WKNavigationActionPolicy) -> Void) {
+        let url = action.request.url
+        let isMain = action.targetFrame?.isMainFrame ?? true
+        if isMain {
+            let ours = url?.host == Self.pageHost || url?.scheme == "about"
+            if !ours, action.navigationType == .linkActivated { Self.openExternally(url) }
+            decisionHandler(ours ? .allow : .cancel)
+            return
+        }
+        let host = url?.host ?? ""
+        let allowed = ["youtube.com", "youtube-nocookie.com", "google.com", "googlevideo.com", "ytimg.com", "doubleclick.net"]
+        let ok = url?.scheme == "about" || (url?.scheme == "https" && allowed.contains { host == $0 || host.hasSuffix("." + $0) })
+        decisionHandler(ok ? .allow : .cancel)
+    }
+
+    /// target="_blank" links: never open a new web view; hand https links to the browser.
+    func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
+                             for action: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
+        // Only real clicks; script-initiated window.open() (e.g. from an ad) is dropped.
+        if action.navigationType == .linkActivated { Self.openExternally(action.request.url) }
+        return nil
+    }
+
+    private static func openExternally(_ url: URL?) {
+        guard let url, url.scheme == "https" else { return }
+        NSWorkspace.shared.open(url)
     }
 }
 
